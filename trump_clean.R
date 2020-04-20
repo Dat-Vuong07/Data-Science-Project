@@ -21,11 +21,11 @@ fix.contractions <- function(doc) {
 # fix (expand) contractions
 trump_ext$text <- sapply(trump_ext$text, fix.contractions)
 
-# Remove RT, all words starting with https
+# Remove RT, all words starting with https and @realDonaldTrump
 trump_ext$text <- trump_ext$text %>% 
   str_remove_all("RT") %>% 
   #str_remove_all("(?<=^|\\s)https[^\\s]+") %>% #remove everything starts with "https"
-  str_remove_all("(?<=^|\\s)@realD[^\\s]+") %>% #remove everything starts with
+  str_remove_all("(?<=^|\\s)@realDonaldTrump[^\\s]+") %>% #remove everything starts with @realDonaldTrump
   #str_remove_all("[^a-zA-Z0-9 ]") #remove special characters
 
 # Remove duplicates
