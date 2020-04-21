@@ -21,12 +21,16 @@ fix.contractions <- function(doc) {
 # fix (expand) contractions
 trump_ext$text <- sapply(trump_ext$text, fix.contractions)
 
+trump_ext <- trump_ext %>% 
+  mutate(hashtag = str_extract_all(text, "(?<=^|\\s)#[^\\s]+"), 
+         links = str_extract_all(text, "(?<=^|\\s)https[^\\s]+"))
+
 # Remove RT, all words starting with https and @realDonaldTrump
 trump_ext$text <- trump_ext$text %>% 
   str_remove_all("RT") %>% 
-  #str_remove_all("(?<=^|\\s)https[^\\s]+") %>% #remove everything starts with "https"
+  str_remove_all("(?<=^|\\s)https[^\\s]+") %>% #remove everything starts with "https"
   str_remove_all("(?<=^|\\s)@realDonaldTrump[^\\s]+") %>% #remove everything starts with @realDonaldTrump
-  #str_remove_all("[^a-zA-Z0-9 ]") #remove special characters
+  str_remove_all("[^a-zA-Z0-9 ]") #remove special characters
 
 # Remove duplicates
 sum(duplicated(trump_ext$text))
@@ -35,14 +39,11 @@ trump_ext <- trump_ext[!duplicated(trump_ext$text),]
 # Trim whitespace
 trump_ext$text <- trimws(trump_ext$text)
 
-count <- trump_ext %>% 
+# Filter records that have more than 5 characters
+trump_filter <- trump_ext %>% 
   mutate(count = str_length(text)) %>% 
-  filter(count < 5)
+  filter(count > 5)
 
 # Save to csv
-write.csv(trump_ext, "Trump_clean.csv", row.names = FALSE)
+write.csv(trump_filter[, 1:4], "Trump_clean.csv", row.names = FALSE)
 
-# Reload and remove rows with whitespace
-trump_ext2 <- read.csv("Trump_clean.csv", stringsAsFactors = FALSE, na.strings = c ("", " ", "  "))
-trump_ext2 <- na.omit(trump_ext2)
-write.csv(trump_ext2, "Trump_clean.csv", row.names = FALSE)
