@@ -1,249 +1,258 @@
-pacman::p_load("tidyverse", "tidytext", "lubridate", "wordcloud2", "gridExtra", "ggrepel")
+
+# Load packages and data --------------------------------------------------
+
+
+pacman::p_load("tidyverse", "tidytext", "lubridate", "wordcloud2", 
+               "gridExtra", "ggrepel", "radarchart", "tm",
+               "quanteda", "quanteda.dictionaries", "reshape2",
+               "topicmodels")
 news <- readRDS("news_clean.Rds")
 glimpse(news[1,])
-news_addtime <- news %>% 
-  mutate(week = isoweek(publish_date), wday = wday(publish_date, label = TRUE)) %>% 
-  filter(week < 17)
-news_addtime <- news_addtime %>% mutate(id = row_number()) #add unique row numbers
 
-# Set 'between' operator
-`%between%`<- function(x,rng) {x>=rng[1] & x<=rng[2]}
 
-# Add fortnight time (2 weeks)
-news_addtime <- news_addtime %>%
-  mutate(
-    fortnight = ifelse(publish_date %between% c("2020-01-16", "2020-01-31"), "Late Jan", 
-                  ifelse(publish_date %between% c("2020-02-01", "2020-02-14"), "Early Feb",
-                         ifelse(publish_date %between% c("2020-02-15", "2020-02-29"), "Late Feb",
-                                ifelse(publish_date %between% c("2020-03-01", "2020-03-15"), "Early Mar",
-                                       ifelse(publish_date %between% c("2020-03-16", "2020-03-31"), "Late Mar",
-                                              ifelse(publish_date %between% c("2020-04-01", "2020-04-15"), "Early Apr",
-                                                     "Late Apr")))))))
+# Function to plot a word chart ----------------------------------------------
 
-news_addtime$fortnight <- factor(news_addtime$fortnight, 
-                                   levels = c("Late Jan", "Early Feb", "Late Feb",
-                                              "Early Mar", "Late Mar", "Early Apr",
-                                              "Late Apr"))
 
-# Count number of articles per week
-plot_n_articles <- news_addtime %>%
+word_chart <- function(data, input, title) {
+  data %>%
+    #set y = 1 to just plot one variable and use word as the label
+    ggplot(aes(as.factor(row), 1, label = input, fill = factor(topic))) +
+    #you want the words, not the points
+    geom_point(color = "transparent", show.legend = FALSE) +
+    #make sure the labels don't overlap
+    geom_label_repel(nudge_x = .2,  
+                     direction = "y",
+                     box.padding = 0.1,
+                     segment.color = "transparent",
+                     size = 4,
+                     show.legend = FALSE) +
+    facet_grid(~topic) +
+    #theme_lyrics() +
+    theme(axis.text.y = element_blank(), axis.text.x = element_blank(),
+          #axis.title.x = element_text(size = 9),
+          panel.grid = element_blank(), panel.background = element_blank(),
+          panel.border = element_rect("lightgray", fill = NA),
+          strip.text.x = element_text(size = 9)) +
+    labs(x = NULL, y = NULL, title = title) +
+    coord_flip()
+}
+
+
+# Data transformation -----------------------------------------------------
+
+
+# Add week, weekday, unique row number
+news <- news %>% 
+  mutate(week = isoweek(publish_date), 
+         wday = wday(publish_date, label = TRUE),
+         id = row_number())
+
+news_title <- news %>% select(-text)
+news_text <- news %>% select(-title)
+
+# Plot number of articles per week
+plot_n_articles <- news %>%
   group_by(week) %>%
   summarise(n_articles = n())
 
-# Plot number of articles per week
 plot_n_articles %>% 
   ggplot() + 
   geom_col(aes(x = week, y = n_articles, fill = -week), show.legend = FALSE)  +
-  scale_x_continuous(n.breaks = 10) +
+  scale_x_continuous(breaks = plot_n_articles$week) +
   scale_y_continuous(limits = c(0, 2400), n.breaks = 10) +
   ggtitle("Published Articles Weekly") +
   labs(x = "Week", y = "Articles Count")
 
-# Specify some general words
-undesirable_words <- c("coronavirus", "video", "amid", "updates", 
-                       "live", "briefing", "due")
-
-# Create tokens for title
-news_unnest_title <- news_addtime %>%
-  select(-c("summary", "keywords", "text")) %>% 
-  unnest_tokens(word, title) %>% 
-  anti_join(stop_words) %>%
-  filter(!word %in% undesirable_words) %>%
-  filter(nchar(word) > 2)
+# Create corpus - token ---------------------------------------------------
 
 
-# Plot top 10 most frequent words
-news_unnest_title %>%
-  distinct() %>% # multiple appearance in a title only count as 1
-  count(word, sort = TRUE) %>%
-  top_n(10) %>%
-  arrange(n) %>% 
-  mutate(word = factor(word, levels = word)) %>% # keep the sorted order
-  ggplot() +
-  geom_col(aes(word, n, fill = word), show.legend = FALSE) +
-  xlab("") + 
-  ylab("Word Count") +
-  ggtitle("Most Frequently Used Words in Articles Title") +
-  coord_flip()
+# Create a copus to load data & change the name of the doc by topic name
 
-# Plot word cloud
-news_title_count <- news_unnest_title %>% 
-  #filter(week == c(3:4)) %>% 
-  count(word, sort = TRUE) %>% 
-  filter(n > 50)
-wordcloud2(news_title_count, size = 0.6)
+corpus_news <- corpus(news_title, text_field = c("title"), unique_docnames = F) %>% 
+  `docnames<-`(news_title$week)# Use this code to update the name of document in the copus
 
-# Plot most frequent words each fortnight
-top_news_title <- news_unnest_title %>%
-  distinct() %>% 
-  count(fortnight, word, sort = TRUE) %>% 
-  arrange(desc(n)) %>%
-  mutate(word = factor(word, levels = unique(word))) %>%
-  group_by(fortnight) %>% 
-  slice(seq_len(10)) %>% # keep top 10 for each group
-  ungroup() %>%
-  arrange(fortnight, n) %>%
-  mutate(row = row_number()) # add index for plotting
+summary(corpus_news)
+str(corpus_news)
 
-top_news_title %>%
-  ggplot(aes(x = row, n, fill = fortnight)) +
-  geom_col(show.legend = FALSE) +
-  labs(x = NULL, y = "Frequency") + 
-  ggtitle("Top 10 Most Popular Words in Title by Fortnight") +
-  facet_wrap(~fortnight, ncol = 3, scales = "free") +
-  scale_x_continuous(  # This handles replacement of row 
-    breaks = top_news_title$row, # notice need to reuse data frame
-    labels = top_news_title$word) +
-  coord_flip()
+# Stop Words & Base formed words
 
-# Using tf-idf analysis
-title_tfidf <- news_unnest_title %>%
-  distinct() %>%
-  count(fortnight, word, sort = TRUE) %>%
-  bind_tf_idf(word, fortnight, n)
+stopwords_extended <- readLines("stopwords_en.txt", encoding = "UTF-8")
+lemma_data <- read.csv("baseform_en.tsv", encoding = "UTF-8")
 
-top_title_tfidf <- title_tfidf %>%
+# Token and remove symbols, numbers, lowcase, and seperator
+
+token_news <- corpus_news %>% 
+  tokens(remove_punct = TRUE, remove_numbers = FALSE, remove_symbols = TRUE, 
+         remove_url = TRUE, remove_separators = TRUE) %>% 
+  tokens_tolower(keep_acronyms = TRUE) %>%
+  tokens_remove(pattern = c("coronavirus", "video", "amid", "updates", 
+                            "live", "briefing", "due")) %>%
+  tokens_replace(lemma_data$inflected_form, lemma_data$lemma, valuetype = "glob") %>% 
+  tokens_remove(pattern = stopwords_extended, padding = T)
+summary(token_news)
+str(token_news)
+head(token_news, 10)
+
+
+# 1st - Key terms extraction ----------------------------------
+
+
+# Extract collocations with 2 words per term
+
+collo_news <- textstat_collocations(token_news, size = 2, min_count = 10)
+
+collo_tokens <- tokens_compound(token_news, collo_news, join = TRUE)
+  # leave join = TRUE to join overlapping compounds into a single compound
+  # this facilitate the appearance of more than 2-grams, eg joining public_health and health_emergency into public_health_emergency
+
+head(collo_tokens, 10)
+
+# Put into document feature matrix (or document term matrix) and remove padding
+
+news_dfm <- collo_tokens %>% 
+  tokens_remove("") %>%
+  dfm()
+dim(news_dfm)
+
+# Group by week and calculate tf-idf
+
+news_dfm_tfidf <- news_dfm %>%
+  dfm_group(groups = "week") %>%
+  dfm_tfidf()
+
+# Convert dfm to a list of 3 and put into a data frame
+
+news_dfm_tfidf <- convert(news_dfm_tfidf, to="tripletlist") 
+
+news_df <- data.frame(week = news_dfm_tfidf$document,
+                      word = news_dfm_tfidf$feature,
+                      tf_idf = news_dfm_tfidf$frequency)
+
+news_df$week <- as.numeric(as.character(news_df$week))
+
+# Transform and plot
+
+top_news_tfidf <- news_df %>%
   arrange(desc(tf_idf)) %>%
   mutate(word = factor(word, levels = unique(word))) %>%
-  group_by(fortnight) %>% 
-  slice(seq_len(10)) %>%
+  group_by(week) %>% 
+  slice(seq_len(8)) %>%
   ungroup() %>%
-  arrange(fortnight, tf_idf) %>%
+  arrange(week, tf_idf) %>%
   mutate(row = row_number())
 
-# Plot the top 10 by tf-idf criterion
-top_title_tfidf %>%
-  ggplot(aes(x = row, tf_idf, fill = fortnight)) +
+top_news_tfidf %>%
+  ggplot(aes(x = row, tf_idf, fill = -week)) +
   geom_col(show.legend = FALSE) +
   labs(x = NULL, y = "TF-IDF") + 
-  ggtitle("Important Words in Title using TF-IDF by Fortnight") +
-  facet_wrap(~fortnight, ncol = 3, scales = "free") +
+  ggtitle("Top Collocations in Title by TF-IDF by Week") +
+  facet_wrap(~week, ncol = 4, scales = "free") +
   scale_x_continuous( 
-    breaks = top_title_tfidf$row,
-    labels = top_title_tfidf$word) +
+    breaks = top_news_tfidf$row,
+    labels = top_news_tfidf$word) +
   coord_flip()
 
-afinn <- get_sentiments("afinn")
-bing <- get_sentiments("bing")
-nrc <- get_sentiments("nrc")
 
-news_afinn <- news_unnest_title %>%
-  inner_join(afinn)
+# 2nd - Sentiment analysis ------------------------------------------------------
 
-news_bing <- news_unnest_title %>% 
-  inner_join(bing)
 
-news_nrc <- news_unnest_title %>% 
-  inner_join(nrc) #%>% 
-  #filter(!sentiment %in% c("positive", "negative") )
-  
-news_nrc %>%
-  group_by(sentiment) %>%
-  summarise(word_count = n()) %>%
-  ungroup() %>%
-  mutate(sentiment = reorder(sentiment, word_count)) %>%
-  #Use `fill = -word_count` to make the larger bars darker
-  ggplot(aes(sentiment, word_count, fill = -word_count)) +
-  geom_col() +
-  guides(fill = FALSE) + #Turn off the legend
-  labs(x = NULL, y = "Word Count") +
-  #scale_y_continuous(limits = c(0, 15000)) + #Hard code the axis limit
-  ggtitle("Title NRC Sentiment") +
-  coord_flip()
+lsd15 <- data_dictionary_LSD2015
 
-fortnight_nrc <- news_nrc %>%
-  distinct() %>% 
-  count(fortnight, sentiment, sort = TRUE) %>% 
-  arrange(desc(n)) %>%
-  mutate(sentiment = factor(sentiment, levels = unique(sentiment))) %>%
-  group_by(fortnight) %>% 
-  #slice(seq_len(10)) %>% # keep top 10 for each group
-  ungroup() %>%
-  arrange(fortnight, n) %>%
-  mutate(row = row_number()) # add index for plotting
+# Create the sentiment word based on Dictionary & group them by week
 
-fortnight_nrc %>%
-  ggplot(aes(x = row, n, fill = fortnight)) +
-  geom_col(show.legend = FALSE) +
-  labs(x = NULL, y = "Frequency") + 
-  ggtitle("Title NRC Sentiment by Fortnight") +
-  facet_wrap(~fortnight, ncol = 3, scales = "free") +
-  scale_x_continuous(  # This handles replacement of row 
-    breaks = fortnight_nrc$row, # notice need to reuse data frame
-    labels = fortnight_nrc$sentiment) +
-  coord_flip()
+dfm_news_lsd <- dfm(token_news, dictionary = lsd15[1:2]) %>% 
+  dfm_group(group = 'week', fill = TRUE) 
 
-fortnight_bing <- news_bing %>%
-  distinct() %>% 
-  count(fortnight, sentiment, sort = TRUE) %>% 
-  arrange(desc(n)) %>%
-  mutate(sentiment = factor(sentiment, levels = unique(sentiment))) %>%
-  group_by(fortnight) %>% 
-  #slice(seq_len(10)) %>% # keep top 10 for each group
-  ungroup() %>%
-  arrange(fortnight, n) %>%
-  mutate(row = row_number()) # add index for plotting
+head(dfm_news_lsd, 10)
 
-fortnight_bing %>%
-  ggplot(aes(x = row, n, fill = fortnight)) +
-  geom_col(show.legend = FALSE) +
-  labs(x = NULL, y = "Frequency") + 
-  ggtitle("Title Bing Sentiment by Fortnight") +
-  facet_wrap(~fortnight, ncol = 3, scales = "free") +
-  scale_x_continuous(  # This handles replacement of row 
-    breaks = fortnight_bing$row, # notice need to reuse data frame
-    labels = fortnight_bing$sentiment) +
-  coord_flip()
+# Sum of token per week 
 
-title_polarity_chart <- news_bing %>%
-  count(sentiment, fortnight) %>%
-  spread(sentiment, n, fill = 0) %>%
-  mutate(polarity = positive - negative,
-         percent_positive = positive / (positive + negative) * 100)
+rowSums(dfm_news_lsd)
 
-#Polarity by chart
-plot1 <- title_polarity_chart %>%
-  ggplot(aes(fortnight, polarity, fill = fortnight)) +
-  geom_col() +
-  #scale_fill_manual(values = my_colors[3:5]) +
+# Create data frame to plot sentiment
+
+lsd_chart <- convert(dfm_news_lsd, to = "data.frame")%>%
+  mutate(sum = positive + negative, 
+         pos_percent = positive/sum*100,
+         neg_percent = negative/sum*100, 
+         polarity = round((pos_percent - neg_percent),3)) %>%
+  select(week = document, 
+         pos_percent,
+         neg_percent,
+         polarity)
+
+lsd_chart$week <- as.numeric(as.character(lsd_chart$week))
+
+# Melt the data to plot
+
+chart <- melt(lsd_chart, id = "week") %>% 
+  arrange(week)
+
+
+# Plot bar chart between Possitive & Negative Sentiment
+
+ggplot(data = chart, aes(x = week, y = value, fill = variable)) + 
+  geom_bar(stat="identity", position=position_dodge()) +
   geom_hline(yintercept = 0, color = "red") +
-  #theme_lyrics() + theme(plot.title = element_text(size = 11)) +
-  xlab(NULL) + ylab(NULL) +
-  ggtitle("Polarity By Fortnight")
+  labs(x = NULL, y = "Frequency") + 
+  scale_x_continuous(  # This handles replacement of row 
+    breaks = chart$week, # notice need to reuse data frame
+    labels = chart$week)
 
-#Percent positive by chart
-plot2 <- title_polarity_chart %>%
-  ggplot(aes(fortnight, percent_positive, fill = fortnight)) +
-  geom_col() +
-  #scale_fill_manual(values = c(my_colors[3:5])) +
+# Plot line chart between Possitive & Negative Sentiment
+
+ggplot(data=chart, aes(x = week, y = value, colour = variable)) +
+  geom_point() +
+  geom_line() +
   geom_hline(yintercept = 0, color = "red") +
-  #theme_lyrics() + theme(plot.title = element_text(size = 11)) +
-  xlab(NULL) + ylab(NULL) +
-  ggtitle("Percent Positive By Fortnight")
+  labs(x = NULL, y = "Frequency") + 
+  scale_x_continuous(  # This handles replacement of row 
+    breaks = chart$week, # notice need to reuse data frame
+    labels = chart$week) +
+  theme(legend.position = "bottom")
+  #scale_colour_brewer(palette = 1)
 
-grid.arrange(plot1, plot2, ncol = 2)
 
-# Most used word in a sentiment
-plot_earlymar <- news_nrc %>%
-  filter(fortnight == "Early Mar") %>%
-  group_by(sentiment) %>%
-  count(word, sort = TRUE) %>%
-  arrange(desc(n)) %>%
-  slice(seq_len(8)) %>% #consider top_n() from dplyr also
-  ungroup()
+# 3rd - Topic modelling -------------------------------------------------------
 
-plot_earlymar %>%
-  #Set `y = 1` to just plot one variable and use word as the label
-  ggplot(aes(word, 1, label = word, fill = sentiment)) +
-  #Make sure the labels don't overlap by using geom_label_repel in place of geom_label
-  geom_label_repel(show.legend = FALSE) +
-  facet_grid(~sentiment) +
-  #theme_lyrics() +
-  theme(axis.text.y = element_blank(), axis.text.x = element_blank(),
-        #axis.title.x = element_text(size = 6),
-        panel.grid = element_blank(), panel.background = element_blank(),
-        panel.border = element_rect("lightgray", fill = NA)) +
-        #strip.text.x = element_text(size = 9)) +
-  xlab(NULL) + ylab(NULL) +
-  ggtitle("Early March NRC Sentiment") +
-  coord_flip()
+
+# Create DTM, but remove terms which occur in less than 0.5% of all documents
+DTM <- collo_tokens %>% 
+  tokens_remove("") %>%
+  dfm() %>% 
+  dfm_trim(min_docfreq = 0.005, max_docfreq = Inf, docfreq_type = "prop")
+dim(DTM)
+
+# Due to vocabulary pruning, we have empty rows in our DTM
+# LDA does not like this. So we remove those docs from the
+# DTM and the metadata
+
+sel_idx <- rowSums(DTM) > 0
+DTM <- DTM[sel_idx, ]
+news_title <- news_title[sel_idx, ]
+
+# Run LDA model
+
+K <- 8 # number of topics
+
+set.seed(123) # set random number generator seed
+
+# Compute the LDA model, inference via 500 iterations of Gibbs sampling 
+  # the progress is reported every 50 iterations
+topicModel <- LDA(DTM, K, method="Gibbs", control = list(iter = 500, verbose = 50))
+
+# have a look a some of the results (posterior distributions)
+
+tmResult <- posterior(topicModel)
+
+# Change to tibble format to visualize
+
+top_terms <- as_tibble(terms(topicModel, 10)) %>%
+  pivot_longer(cols = seq_len(K), names_to = "topic") %>% 
+  mutate(row = row_number())
+
+#create a title to pass to word_chart
+
+lda_title <- paste("LDA Top Terms for", K, "Topics")
+
+word_chart(top_terms, top_terms$value, lda_title)
